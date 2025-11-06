@@ -60,41 +60,123 @@
 
 
 
+// pipeline {
+//     agent any
+
+//     environment {
+//         IMAGE_NAME = "hello-devops"
+//         CONTAINER_NAME = "hello-devops-container"
+//         PORT = "3000"
+//     }
+
+//     stages {
+
+//         stage('Checkout') {
+//             steps {
+//                 echo "Fetching latest code from GitHub..."
+//                 checkout scm
+//             }
+//         }
+
+//         stage('Build Docker Image') {
+//             steps {
+//                 echo "Building Docker image..."
+//                 script {
+//                     sh 'docker build -t ${IMAGE_NAME} .'
+//                 }
+//             }
+//         }
+
+//         stage('Security Scan with Trivy') {
+//             steps {
+//                 echo "Running Trivy security scan..."
+//                 script {
+//                     // Create reports folder if not exists
+//                     sh '''
+//                         mkdir -p reports
+//                         trivy image --severity HIGH,CRITICAL --format table -o reports/trivy-report.txt ${IMAGE_NAME} || true
+//                     '''
+//                     echo "Trivy scan completed. Report saved to 'reports/trivy-report.txt'"
+//                 }
+//             }
+//         }
+
+//         stage('Run Container') {
+//             steps {
+//                 echo "Running Docker container..."
+//                 script {
+//                     sh '''
+//                         docker rm -f ${CONTAINER_NAME} || true
+//                         docker run -d -p ${PORT}:3000 --name ${CONTAINER_NAME} ${IMAGE_NAME}
+//                     '''
+//                 }
+//             }
+//         }
+
+//         stage('Verify Container') {
+//             steps {
+//                 echo "Checking if app is running..."
+//                 script {
+//                     sh "docker ps | grep ${CONTAINER_NAME}"
+//                 }
+//             }
+//         }
+//     }
+
+//     post {
+//         always {
+//             archiveArtifacts artifacts: 'reports/*.txt', allowEmptyArchive: true
+//         }
+//         success {
+//             echo "✅ Build, scan, and deploy successful!"
+//         }
+//         failure {
+//             echo "❌ Build failed. Check logs."
+//         }
+//     }
+// }
+
+
+
 pipeline {
     agent any
 
     environment {
-        IMAGE_NAME = "hello-devops"
+        DOCKER_IMAGE = "hello-devops"
         CONTAINER_NAME = "hello-devops-container"
-        PORT = "3000"
     }
 
     stages {
 
         stage('Checkout') {
             steps {
-                echo "Fetching latest code from GitHub..."
-                checkout scm
+                echo 'Fetching latest code from GitHub...'
+                checkout([$class: 'GitSCM',
+                    branches: [[name: '*/main']],
+                    userRemoteConfigs: [[
+                        url: 'https://github.com/nik-bkp8/HelloDevOps.git',
+                        credentialsId: 'github-creds'
+                    ]]
+                ])
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                echo "Building Docker image..."
+                echo 'Building Docker image...'
                 script {
-                    sh 'docker build -t ${IMAGE_NAME} .'
+                    sh "docker build -t ${DOCKER_IMAGE} ."
                 }
             }
         }
 
         stage('Security Scan with Trivy') {
             steps {
-                echo "Running Trivy security scan..."
+                echo 'Running Trivy security scan...'
                 script {
-                    // Create reports folder if not exists
                     sh '''
                         mkdir -p reports
-                        trivy image --severity HIGH,CRITICAL --format table -o reports/trivy-report.txt ${IMAGE_NAME} || true
+                        trivy image --severity HIGH,CRITICAL --format table -o reports/trivy-report.txt ${DOCKER_IMAGE}
                     '''
                     echo "Trivy scan completed. Report saved to 'reports/trivy-report.txt'"
                 }
@@ -103,11 +185,11 @@ pipeline {
 
         stage('Run Container') {
             steps {
-                echo "Running Docker container..."
+                echo 'Running Docker container...'
                 script {
                     sh '''
                         docker rm -f ${CONTAINER_NAME} || true
-                        docker run -d -p ${PORT}:3000 --name ${CONTAINER_NAME} ${IMAGE_NAME}
+                        docker run -d -p 3000:3000 --name ${CONTAINER_NAME} ${DOCKER_IMAGE}
                     '''
                 }
             }
@@ -115,23 +197,34 @@ pipeline {
 
         stage('Verify Container') {
             steps {
-                echo "Checking if app is running..."
+                echo 'Verifying container health...'
                 script {
-                    sh "docker ps | grep ${CONTAINER_NAME}"
+                    sh 'docker ps | grep ${CONTAINER_NAME}'
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                echo 'Deploying application to Kubernetes...'
+                script {
+                    sh '''
+                        kubectl apply -f k8s/deployment.yaml
+                        kubectl apply -f k8s/service.yaml
+                        kubectl rollout status deployment/hello-devops-deployment
+                    '''
                 }
             }
         }
     }
 
     post {
-        always {
-            archiveArtifacts artifacts: 'reports/*.txt', allowEmptyArchive: true
-        }
         success {
-            echo "✅ Build, scan, and deploy successful!"
+            echo '✅ Build and deployment completed successfully!'
         }
         failure {
-            echo "❌ Build failed. Check logs."
+            echo '❌ Build failed. Check logs.'
+            archiveArtifacts artifacts: 'reports/trivy-report.txt', onlyIfSuccessful: false
         }
     }
 }
